@@ -1,0 +1,101 @@
+# =========================================
+# 📦 Node.js Lambdas
+# =========================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Build / Dist files
+dist/
+build/
+*.zip
+*.tar.gz
+
+# Lambda zip temporal
+lambda.zip
+
+# =========================================
+# ☁️ Terraform
+# =========================================
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+override.tf
+override.tf.json
+terraform.tfvars
+terraform.tfvars.json
+*.backup
+*.bak
+
+# Local environment vars
+.env
+.env.*
+*.tfvars.local
+
+# Terraform output files
+plan.out
+
+# =========================================
+# 🧠 IDE / Editor configs
+# =========================================
+.vscode/
+.idea/
+*.iml
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+Thumbs.db
+
+# =========================================
+# 🔐 Credentials / OS
+# =========================================
+aws-credentials.json
+*.pem
+*.ppk
+*.key
+*.crt
+*.csr
+*.der
+*.cer
+*.cfg
+*.ini
+*.bat
+
+# =========================================
+# 🧪 Tests / Coverage
+# =========================================
+coverage/
+.nyc_output/
+jest-html-reporters-*.html
+test-results.xml
+reports/
+
+# =========================================
+# 🔄 Logs
+# =========================================
+logs/
+*.log
+*.out
+*.err
+npm-debug.log*
+yarn-debug.log*
+debug.log
+
+# =========================================
+# 📁 Misc
+# =========================================
+tmp/
+temp/
+.cache/
+.cache-loader/
+__pycache__/
