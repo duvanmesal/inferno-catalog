@@ -16,7 +16,7 @@ locals {
   tags = { Project = "inferno-bank", Stack = "catalog" }
 }
 
-# -------------------- 1. VPC completa --------------------
+# ==================== 1) VPC completa ====================
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_support   = true
@@ -59,7 +59,7 @@ resource "aws_subnet" "private_b" {
   tags = merge(local.tags, { Name = "${var.name_prefix}-private-b" })
 }
 
-# NAT Gateway para que las Lambdas salgan a Internet
+# NAT Gateway (salida a Internet para Lambdas en subnets privadas)
 resource "aws_eip" "nat" {
   domain = "vpc"
   tags   = merge(local.tags, { Name = "${var.name_prefix}-nat-eip" })
@@ -114,7 +114,7 @@ resource "aws_route_table_association" "priv_b" {
   route_table_id = aws_route_table.private.id
 }
 
-# SGs
+# Security Groups
 resource "aws_security_group" "lambda_sg" {
   name   = "${var.name_prefix}-lambda-sg"
   vpc_id = aws_vpc.main.id
@@ -144,7 +144,7 @@ resource "aws_security_group" "redis_sg" {
   tags = merge(local.tags, { Name = "${var.name_prefix}-redis-sg" })
 }
 
-# -------------------- 2. Redis --------------------
+# ==================== 2) Redis (ElastiCache) ====================
 resource "random_password" "redis_auth" {
   length  = 32
   special = false
@@ -165,13 +165,13 @@ resource "aws_elasticache_replication_group" "redis" {
   num_node_groups         = 1
   replicas_per_node_group = 0
 
-  port                           = 6379
-  at_rest_encryption_enabled     = true
-  transit_encryption_enabled     = true
-  auth_token                     = random_password.redis_auth.result
-  auth_token_update_strategy     = "ROTATE"
-  automatic_failover_enabled     = false
-  multi_az_enabled               = false
+  port                       = 6379
+  at_rest_encryption_enabled = true
+  transit_encryption_enabled = true
+  auth_token                 = random_password.redis_auth.result
+  auth_token_update_strategy = "ROTATE"
+  automatic_failover_enabled = false
+  multi_az_enabled           = false
 
   security_group_ids = [aws_security_group.redis_sg.id]
   subnet_group_name  = aws_elasticache_subnet_group.redis.name
@@ -179,7 +179,18 @@ resource "aws_elasticache_replication_group" "redis" {
   tags = local.tags
 }
 
-# -------------------- 3. S3 bucket --------------------
+# ==================== 3) Secrets Manager (token Redis) ====================
+resource "aws_secretsmanager_secret" "redis_auth" {
+  name = "${var.name_prefix}-redis-auth-token"
+  tags = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "redis_auth" {
+  secret_id     = aws_secretsmanager_secret.redis_auth.id
+  secret_string = random_password.redis_auth.result
+}
+
+# ==================== 4) S3 bucket para catálogos ====================
 resource "aws_s3_bucket" "catalog" {
   bucket = "${var.name_prefix}-catalog-uploads"
   tags   = merge(local.tags, { Name = "${var.name_prefix}-catalog-uploads" })
@@ -193,7 +204,7 @@ resource "aws_s3_bucket_versioning" "catalog" {
   }
 }
 
-# -------------------- 4. IAM + Lambdas --------------------
+# ==================== 5) IAM (roles/policies) ====================
 data "aws_iam_policy_document" "assume_lambda" {
   statement {
     actions = ["sts:AssumeRole"]
@@ -244,30 +255,35 @@ resource "aws_iam_role_policy_attachment" "s3_attach" {
   policy_arn = aws_iam_policy.s3.arn
 }
 
-# Código placeholder (ZIP inline)
-data "archive_file" "lambda_zip" {
-  type        = "zip"
-  output_path = "${path.module}/lambda.zip"
-
-  source_content = <<-EOT
-  exports.handler = async () => {
-    return {
-      statusCode: 200,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ok: true })
-    };
-  };
-  EOT
-
-  source_content_filename = "index.js"
+# Permiso para leer el secreto de Redis
+data "aws_iam_policy_document" "secrets_read" {
+  statement {
+    effect = "Allow"
+    actions = ["secretsmanager:GetSecretValue"]
+    resources = [aws_secretsmanager_secret.redis_auth.arn]
+  }
 }
+
+resource "aws_iam_policy" "secrets_read" {
+  name   = "${var.name_prefix}-secrets-read"
+  policy = data.aws_iam_policy_document.secrets_read.json
+}
+
+resource "aws_iam_role_policy_attachment" "secrets_read_attach" {
+  role       = aws_iam_role.lambda.name
+  policy_arn = aws_iam_policy.secrets_read.arn
+}
+
+# ==================== 6) Lambdas (ZIPs locales) ====================
+# Coloca catalog-get.zip y catalog-update.zip en la misma carpeta de este main.tf (path.module)
 
 resource "aws_lambda_function" "catalog_get" {
   function_name = "${var.name_prefix}-catalog-get"
   role          = aws_iam_role.lambda.arn
   runtime       = "nodejs20.x"
   handler       = "index.handler"
-  filename      = data.archive_file.lambda_zip.output_path
+  filename      = "${path.module}/catalog-get.zip"
+  source_code_hash = filebase64sha256("${path.module}/catalog-get.zip")
   timeout       = 10
   memory_size   = 256
 
@@ -278,10 +294,10 @@ resource "aws_lambda_function" "catalog_get" {
 
   environment {
     variables = {
-      REDIS_ENDPOINT = aws_elasticache_replication_group.redis.primary_endpoint_address
-      REDIS_PORT     = "6379"
-      REDIS_TLS      = "true"
-      # Para prod: pasar token vía Secrets Manager/SSM y NO en variables de entorno planas
+      REDIS_ENDPOINT        = aws_elasticache_replication_group.redis.primary_endpoint_address
+      REDIS_PORT            = "6379"
+      REDIS_TLS             = "true"
+      REDIS_AUTH_SECRET_ARN = aws_secretsmanager_secret.redis_auth.arn
     }
   }
 
@@ -290,7 +306,8 @@ resource "aws_lambda_function" "catalog_get" {
   depends_on = [
     aws_iam_role_policy_attachment.lambda_logs,
     aws_iam_role_policy_attachment.s3_attach,
-    aws_iam_role_policy_attachment.lambda_vpc_access
+    aws_iam_role_policy_attachment.lambda_vpc_access,
+    aws_iam_role_policy_attachment.secrets_read_attach
   ]
 }
 
@@ -299,7 +316,8 @@ resource "aws_lambda_function" "catalog_update" {
   role          = aws_iam_role.lambda.arn
   runtime       = "nodejs20.x"
   handler       = "index.handler"
-  filename      = data.archive_file.lambda_zip.output_path
+  filename      = "${path.module}/catalog-update.zip"
+  source_code_hash = filebase64sha256("${path.module}/catalog-update.zip")
   timeout       = 30
   memory_size   = 512
 
@@ -310,10 +328,11 @@ resource "aws_lambda_function" "catalog_update" {
 
   environment {
     variables = {
-      CATALOG_BUCKET_NAME = aws_s3_bucket.catalog.bucket
-      REDIS_ENDPOINT      = aws_elasticache_replication_group.redis.primary_endpoint_address
-      REDIS_PORT          = "6379"
-      REDIS_TLS           = "true"
+      CATALOG_BUCKET_NAME    = aws_s3_bucket.catalog.bucket
+      REDIS_ENDPOINT         = aws_elasticache_replication_group.redis.primary_endpoint_address
+      REDIS_PORT             = "6379"
+      REDIS_TLS              = "true"
+      REDIS_AUTH_SECRET_ARN  = aws_secretsmanager_secret.redis_auth.arn
     }
   }
 
@@ -322,11 +341,12 @@ resource "aws_lambda_function" "catalog_update" {
   depends_on = [
     aws_iam_role_policy_attachment.lambda_logs,
     aws_iam_role_policy_attachment.s3_attach,
-    aws_iam_role_policy_attachment.lambda_vpc_access
+    aws_iam_role_policy_attachment.lambda_vpc_access,
+    aws_iam_role_policy_attachment.secrets_read_attach
   ]
 }
 
-# -------------------- 5. API Gateway --------------------
+# ==================== 7) API Gateway (HTTP API) ====================
 resource "aws_apigatewayv2_api" "api" {
   name          = "${var.name_prefix}-catalog-api"
   protocol_type = "HTTP"

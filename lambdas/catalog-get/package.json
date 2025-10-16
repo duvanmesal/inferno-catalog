@@ -1,0 +1,12 @@
+{
+  "name": "catalog-get",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "dependencies": {
+    "ioredis": "^5.4.1",
+    "@aws-sdk/client-secrets-manager": "^3.670.0",
+    "@aws-sdk/client-s3": "^3.670.0",
+    "csv-parse": "^5.5.6"
+  }
+}
